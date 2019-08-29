@@ -210,9 +210,17 @@ class BasicNES:
         self.bound_check = bound_check
         self.solutions = np.empty((self.popsize, self.dim))
 
-    def ask(self):
-        sigma_m = np.tile(self.sigma, (self.popsize, 1))
-        self.solutions = self.mu + np.random.randn(self.popsize, self.dim)*sigma_m
+    def ask(self, check_type=None):
+        self.solutions = self.mu + np.random.randn(self.popsize, self.dim)*self.sigma
+
+        if self.bound_check:
+            # check type
+            if check_type == "box":
+                idb = np.where(self.solutions < self.lbounds)
+                self.solutions[idb[0], idb[1]] = self.lbounds[idb[0], idb[1]]
+                idu = np.where(self.solutions > self.ubounds)
+                self.solutions[idu[0], idu[1]] = self.ubounds[idu[0], idu[1]]
+
 
 
 
