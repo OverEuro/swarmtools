@@ -5,6 +5,67 @@ def func(x):
     y = np.sum(x**2)
     return y
 
+
+'''Optimizers Class'''
+class Optimizer(object):
+    def __init__(self, obj, epsilon=1e-08):
+        self.obj = obj
+        self.dim = obj.num_params
+        self.eps = epsilon
+        self.t = 0
+
+    def update(self, der):
+        self.t += 1
+        dir_ = self._compute_dir(der)
+        the = self.obj.mu
+        rat = np.linalg.norm(dir_) / (np.linalg.norm(the) + self.eps)
+        self.obj.mu = the + dir_
+        return rat
+
+    def _compute_step(self, der):
+        raise NotImplementedError
+
+
+class Adam(Optimizer):
+    def __init__(self, obj, stepsize, beta1=0.99, beta2=0.999):
+        Optimizer.__init__(self, obj)
+        self.stepsize = stepsize
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.m = np.zeros(self.dim, dtype=np.float32)
+        self.v = np.zeros(self.dim, dtype=np.float32)
+
+    def _compute_step(self, der):
+        w = self.stepsize * np.sqrt(1-self.beta2**self.t)/(1-self.beta1**self.t)
+        self.m = self.beta1 * self.m + (1-self.beta1) * der
+        self.v = self.beta2 * self.v + (1-self.beta2) * (der * der)
+        dir_ = -w * self.m / (np.sqrt(self.v) + self.eps)
+        return dir_
+
+
+class BasicSGD(Optimizer):
+    def __init__(self, obj, stepsize):
+        Optimizer.__init__(self, obj)
+        self.stepsize = stepsize
+
+    def _compute_step(self, der):
+        dir_ = -self.stepsize * der
+        return dir_
+
+
+class SGD(Optimizer):
+    def __init__(self, obj, stepsize, momentum=0.9):
+        Optimizer.__init__(self, obj)
+        self.v = np.zeros(self.dim, dtype=np.float32)
+        self.stepsize = stepsize
+        self.m = momentum
+
+    def _compute_step(self, der):
+        self.v = self.m * self.v - self.stepsize*der
+        dir_ = self.v
+        return dir_
+
+
 class BasicPSO:
     
     def __init__(self, num_params,
@@ -117,6 +178,45 @@ class BasicPSO:
         self.w -= self.step_size
         if self.w <= 0:
             self.w = self.step_size
+
+
+class BasicNES:
+    def __init__(self, num_params,
+                 lbound,
+                 ubound,
+                 mu,
+                 mu_lr=0.5,
+                 sigma_init=1,
+                 sigma_lr=0.2,
+                 popsize=30,
+                 elite_rt=1,
+                 ada_ert=False,
+                 dire=0,
+                 smooth_fit=True,
+                 bound_check=False):
+
+        self.dim = num_params
+        self.popsize = popsize
+        self.lbounds = np.tile(lbound, (self.popsize, 1))
+        self.ubounds = np.tile(ubound, (self.popsize, 1))
+        self.mu = mu
+        self.mu_lr = mu_lr
+        self.sigma = np.ones(self.dim) * sigma_init
+        self.sigma_lr = sigma_lr
+        self.elite_rt = elite_rt
+        self.ada_ert = ada_ert
+        self.dire = dire
+        self.smooth_fit = smooth_fit
+        self.bound_check = bound_check
+        self.solutions = np.empty((self.popsize, self.dim))
+
+    def ask(self):
+        sigma_m = np.tile(self.sigma, (self.popsize, 1))
+        self.solutions = self.mu + np.random.randn(self.popsize, self.dim)*sigma_m
+
+
+
+
     
 
 if __name__=="__main__":
