@@ -1,33 +1,54 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 def func(x):
-    y = np.sum(x**2)
+    # y = np.sum(x**2)
+    y = 100 * np.sum((x[:-1]**2-x[1:])**2) + np.sum((x[:-1]-1)**2)
     return y
 
+def compute_ranks(x):
+  """
+  Returns ranks in [0, len(x))
+  Note: This is different from scipy.stats.rankdata, which returns ranks in [1, len(x)].
+  (https://github.com/openai/evolution-strategies-starter/blob/master/es_distributed/es.py)
+  """
+  assert x.ndim == 1
+  ranks = np.empty(len(x), dtype=int)
+  ranks[x.argsort()] = np.arange(len(x))
+  return ranks
+
+def compute_centered_ranks(x):
+  """
+  https://github.com/openai/evolution-strategies-starter/blob/master/es_distributed/es.py
+  """
+  y = compute_ranks(x.ravel()).reshape(x.shape).astype(np.float32)
+  y /= (x.size - 1)
+  y -= .5
+  return y
 
 '''Optimizers Class'''
 class Optimizer(object):
     def __init__(self, obj, epsilon=1e-08):
         self.obj = obj
-        self.dim = obj.num_params
+        self.dim = obj.dim
         self.eps = epsilon
         self.t = 0
 
     def update(self, der):
         self.t += 1
-        dir_ = self._compute_dir(der)
+        dir_ = self._compute_step(der)
         the = self.obj.mu
-        rat = np.linalg.norm(dir_) / (np.linalg.norm(the) + self.eps)
+        ratio = np.linalg.norm(dir_) / (np.linalg.norm(the) + self.eps)
         self.obj.mu = the + dir_
-        return rat
+        return ratio
 
     def _compute_step(self, der):
         raise NotImplementedError
 
 
 class Adam(Optimizer):
-    def __init__(self, obj, stepsize, beta1=0.99, beta2=0.999):
+    def __init__(self, obj, stepsize, beta1=0.9, beta2=0.999):
         Optimizer.__init__(self, obj)
         self.stepsize = stepsize
         self.beta1 = beta1
@@ -39,7 +60,7 @@ class Adam(Optimizer):
         w = self.stepsize * np.sqrt(1-self.beta2**self.t)/(1-self.beta1**self.t)
         self.m = self.beta1 * self.m + (1-self.beta1) * der
         self.v = self.beta2 * self.v + (1-self.beta2) * (der * der)
-        dir_ = -w * self.m / (np.sqrt(self.v) + self.eps)
+        dir_ = w * self.m / (np.sqrt(self.v) + self.eps)
         return dir_
 
 
@@ -49,7 +70,7 @@ class BasicSGD(Optimizer):
         self.stepsize = stepsize
 
     def _compute_step(self, der):
-        dir_ = -self.stepsize * der
+        dir_ = self.stepsize * der
         return dir_
 
 
@@ -61,7 +82,7 @@ class SGD(Optimizer):
         self.m = momentum
 
     def _compute_step(self, der):
-        self.v = self.m * self.v - self.stepsize*der
+        self.v = self.m * self.v + self.stepsize*der
         dir_ = self.v
         return dir_
 
@@ -186,13 +207,14 @@ class BasicNES:
                  ubound,
                  mu,
                  mu_lr=0.5,
-                 sigma_init=1,
+                 sigma_init=1.0,
                  sigma_lr=0.2,
+                 sigma_decay=0.999,
+                 sigma_db=0.01,
                  popsize=30,
-                 elite_rt=1,
-                 ada_ert=False,
+                 elite_rt=1.0,
                  dire=0,
-                 smooth_fit=True,
+                 optim='SGD',
                  bound_check=False):
 
         self.dim = num_params
@@ -203,15 +225,29 @@ class BasicNES:
         self.mu_lr = mu_lr
         self.sigma = np.ones(self.dim) * sigma_init
         self.sigma_lr = sigma_lr
+        self.sigma_decay = sigma_decay
+        self.sigma_db = sigma_db
         self.elite_rt = elite_rt
-        self.ada_ert = ada_ert
         self.dire = dire
-        self.smooth_fit = smooth_fit
         self.bound_check = bound_check
         self.solutions = np.empty((self.popsize, self.dim))
+        if optim == 'Adam':
+            self.optimizer = Adam(self, mu_lr, beta1=0.99, beta2=0.999)
+        elif optim == 'BasicSGD':
+            self.optimizer = BasicSGD(self, mu_lr)
+        elif optim == 'SGD':
+            self.optimizer = SGD(self, mu_lr, momentum=0.5)
+        if self.dire == 0:
+            self.best = np.inf
+            self.shapevec = np.linspace(0.5, -0.5, int(self.popsize*self.elite_rt))
+        if self.dire == 1:
+            self.best = -np.inf
+            self.shapevec = np.linspace(-0.5, 0.5, int(self.popsize * self.elite_rt))
+        self.best_mu = np.zeros(self.dim)
 
     def ask(self, check_type=None):
-        self.solutions = self.mu + np.random.randn(self.popsize, self.dim)*self.sigma
+        self.epsilon = np.random.randn(self.popsize, self.dim)*self.sigma
+        self.solutions = self.mu + self.epsilon
 
         if self.bound_check:
             # check type
@@ -220,38 +256,94 @@ class BasicNES:
                 self.solutions[idb[0], idb[1]] = self.lbounds[idb[0], idb[1]]
                 idu = np.where(self.solutions > self.ubounds)
                 self.solutions[idu[0], idu[1]] = self.ubounds[idu[0], idu[1]]
+            if check_type == "restart":
+                randmaxt = self.lbounds + np.random.rand(self.popsize, self.dim) * \
+                           (self.ubounds - self.lbounds)
+                idb = np.where(self.solutions < self.lbounds)
+                self.solutions[idb[0], idb[1]] = randmaxt[idb[0], idb[1]]
+                idu = np.where(self.solutions > self.ubounds)
+                self.solutions[idu[0], idu[1]] = randmaxt[idu[0], idu[1]]
+
+        return self.solutions
+
+    def tell(self, fit_array):
+        # ori_fit = fit_array
+        index = np.argsort(fit_array)
+        # if self.dire == 1:
+        #     index = index[::-1]
+        if self.dire == 0:
+            eps_cut = self.epsilon[index[0:int(self.popsize*self.elite_rt)], :]
+        else:
+            eps_cut = self.epsilon[index[int(self.popsize * (1-self.elite_rt))+1::], :]
+        fit_cut = self.shapevec
+
+        # update mean
+        gol_mu = np.sum(eps_cut*fit_cut.reshape(len(fit_cut), 1), axis=0)
+        # print(gol_mu)
+        self.update_ratio = self.optimizer.update(gol_mu)
+        # print(update_ratio)
+        # print(self.mu)
+        # update sigma
+        gol_sg = np.sum(fit_cut.reshape(len(fit_cut), 1)*(eps_cut**2-self.sigma**2)/self.sigma, axis=0) / int(self.popsize*self.elite_rt)
+        self.sigma += self.sigma_lr*gol_sg
+        # if self.sigma_decay < 1:
+        #     self.sigma[self.sigma > self.sigma_db] *= self.sigma_decay
+
+        # print(self.sigma)
+        if self.dire == 0:
+            if fit_array[index[0]] < self.best:
+                self.best = fit_array[index[0]]
+                self.best_mu = np.copy(self.solutions[index[0], :])
+        elif self.dire == 1:
+            if fit_array[index[-1]] > self.best:
+                self.best = fit_array[index[-1]]
+                self.best_mu = np.copy(self.solutions[index[-1], :])
+
+    def current_best(self):
+
+        return (self.best, self.best_mu, self.update_ratio)
 
 
-
-
-
-    
-
-if __name__=="__main__":
-    
-    dim = 30
-    epochs = 10000
-    lb = np.ones(dim) * -30
-    ub = np.ones(dim) * 30
-    PSO = BasicPSO(dim, lb, ub, popsize=30, ada_w=True, dire=0, bound_check=True)
-    
-    solutions = PSO.start() # initial
-    fit_array = np.empty(PSO.popsize)
-    
-    for i in range(epochs):
-        
-        for j in range(PSO.popsize):
-            fit_array[j] = func(solutions[j, :])
-        
-    
-        PSO.tell(fit_array)
-        solutions = PSO.ask()
-        res = PSO.current_best()
-        
-        PSO.step(epochs, i, end_w=0.1)
-        
-        print('Iter:', i, ' bestv:', res[1])
-        
+# if __name__=="__main__":
+#
+#     dim = 30
+#     epochs = 10000
+#     lb = np.ones(dim) * -30
+#     ub = np.ones(dim) * 30
+#     # PSO = BasicPSO(dim, popsize=30, ada_w=True, dire=0, bound_check=True)
+#     mu = -np.ones(dim)
+#     NES = BasicNES(dim, lb, ub, mu, mu_lr=0.5, popsize=200, elite_rt=0.8, dire=0, optim='Adam')
+#     # solutions = PSO.start(lb, ub)  # initial
+#     fit_array = np.empty(NES.popsize)
+#
+#     res_cur = []
+#     rat_cur = []
+#     for i in range(epochs):
+#
+#         solutions = NES.ask()
+#         for j in range(NES.popsize):
+#             fit_array[j] = func(solutions[j, :])
+#
+#         NES.tell(fit_array)
+#         # solutions = PSO.ask(check_type="restart")
+#         res, best, ratio = NES.current_best()
+#
+#         # PSO.step(epochs, i, end_w=0.1)
+#
+#         # print('Iter:', i, ' bestv:', res[0])
+#         res_cur.append(res)
+#         rat_cur.append(ratio)
+#     # print(best)
+#
+#     plt.figure()
+#     plt.plot(res_cur)
+#     plt.yscale('log')
+#     plt.show()
+#
+#     plt.figure()
+#     plt.plot(rat_cur)
+#     plt.yscale('log')
+#     plt.show()
     
     
             

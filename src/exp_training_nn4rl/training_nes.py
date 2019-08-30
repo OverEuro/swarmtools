@@ -11,6 +11,7 @@ class con_bandit():
     def __init__(self):
         self.state = 0
         self.bandits = np.array([[.9,.9,.6,-5],[.7,-5,1,.8],[-5,.9,.6,.8],
+                                 [.5,.6,1,-5],[.4,.5,-5,.8],[.4,-5,.7,.8],
                                  [.5,.6,1,-5],[.4,.5,-5,.8],[.4,-5,.7,.8]])
         self.num_bandits = self.bandits.shape[0]
         self.num_actions = self.bandits.shape[1]
@@ -74,11 +75,11 @@ print("The number of NN's params =", NPARAMS)
 
 learner.eval()
 one_hot = F.one_hot(th.arange(0, env.num_bandits)).float().cuda()
-eval_num = 50000
+eval_num = 100000
 lb = np.ones(NPARAMS) * -1.5
 ub = np.ones(NPARAMS) * 1.5
 mu = np.zeros(NPARAMS)
-optimizer = sts.BasicNES(NPARAMS, lb, ub, mu, mu_lr=0.5, popsize=200, elite_rt=0.8, optim='Adam')
+optimizer = sts.BasicNES(NPARAMS, lb, ub, mu, mu_lr=0.01, popsize=30, elite_rt=0.8, optim='SGD')
 
 # solutions = optimizer.start(lbound, ubound)
 fits = np.empty(optimizer.popsize)
@@ -88,33 +89,33 @@ epoch = 0
 best_f = []
 epochs = int(eval_num / (optimizer.popsize * batch_size))
 while(evals < eval_num):
-    
+
+    solutions = optimizer.ask()
     # compute all particles' fitness:
     for i in range(optimizer.popsize):
         update_model(solutions[i, :], learner, model_shapes)
         sum_r = 0
         for j in range(batch_size):
-            s = env.getState() # get an random state from env
-            pro_list = learner.forward(one_hot[s,:].unsqueeze(0))
+            s = env.getState()  # get an random state from env
+            pro_list = learner.forward(one_hot[s, :].unsqueeze(0))
             action = th.argmax(pro_list)
             reward = env.pullArm(action)
             sum_r += reward
-        fits[i] = sum_r
+        fits[i] = -sum_r
     
     optimizer.tell(fits)
-    solutions = optimizer.ask(check_type='restart')
     
 #    optimizer.step(epochs, epoch, end_w=0.1)
     
     # print evolution process
-    best_f.append(optimizer.current_best()[1])
-    print('EPOCH:', epoch, 'Fitness:', optimizer.current_best()[1])
+    best_f.append(optimizer.current_best()[0])
+    print('EPOCH:', epoch, 'Fitness:', optimizer.current_best()[0])
     epoch += 1
     
     # update evals
     evals += optimizer.popsize * batch_size
 
-best_params = optimizer.current_best()[0]
+best_params = optimizer.current_best()[1]
 update_model(best_params, learner, model_shapes)
 
 output = learner.forward(one_hot).cpu().detach().numpy()
