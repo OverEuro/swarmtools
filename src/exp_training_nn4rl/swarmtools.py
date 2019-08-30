@@ -7,25 +7,6 @@ def func(x):
     y = 100 * np.sum((x[:-1]**2-x[1:])**2) + np.sum((x[:-1]-1)**2)
     return y
 
-def compute_ranks(x):
-  """
-  Returns ranks in [0, len(x))
-  Note: This is different from scipy.stats.rankdata, which returns ranks in [1, len(x)].
-  (https://github.com/openai/evolution-strategies-starter/blob/master/es_distributed/es.py)
-  """
-  assert x.ndim == 1
-  ranks = np.empty(len(x), dtype=int)
-  ranks[x.argsort()] = np.arange(len(x))
-  return ranks
-
-def compute_centered_ranks(x):
-  """
-  https://github.com/openai/evolution-strategies-starter/blob/master/es_distributed/es.py
-  """
-  y = compute_ranks(x.ravel()).reshape(x.shape).astype(np.float32)
-  y /= (x.size - 1)
-  y -= .5
-  return y
 
 '''Optimizers Class'''
 class Optimizer(object):
@@ -48,7 +29,7 @@ class Optimizer(object):
 
 
 class Adam(Optimizer):
-    def __init__(self, obj, stepsize, beta1=0.9, beta2=0.999):
+    def __init__(self, obj, stepsize, beta1=0.99, beta2=0.999):
         Optimizer.__init__(self, obj)
         self.stepsize = stepsize
         self.beta1 = beta1
@@ -215,7 +196,10 @@ class BasicNES:
                  elite_rt=1.0,
                  dire=0,
                  optim='SGD',
-                 bound_check=False):
+                 bound_check=False,
+                 mirror_sample=True,
+                 step=100,
+                 mu_decay=0.1):
 
         self.dim = num_params
         self.popsize = popsize
@@ -244,9 +228,18 @@ class BasicNES:
             self.best = -np.inf
             self.shapevec = np.linspace(-0.5, 0.5, int(self.popsize * self.elite_rt))
         self.best_mu = np.zeros(self.dim)
+        self.mirror_sample = mirror_sample  # If mirror_sample=True, the popsize must be even
+        self.step = step
+        self.mu_decay = mu_decay
 
     def ask(self, check_type=None):
-        self.epsilon = np.random.randn(self.popsize, self.dim)*self.sigma
+        if self.mirror_sample:
+            assert self.popsize % 2 == 0, "If mirror_sample=True, the popsize must be even"
+            half_popsize = int(self.popsize / 2)
+            epsilon_half = np.random.randn(half_popsize, self.dim)*self.sigma
+            self.epsilon = np.concatenate([epsilon_half, -epsilon_half])
+        else:
+            self.epsilon = np.random.randn(self.popsize, self.dim)*self.sigma
         self.solutions = self.mu + self.epsilon
 
         if self.bound_check:
@@ -267,6 +260,8 @@ class BasicNES:
         return self.solutions
 
     def tell(self, fit_array):
+        if (self.optimizer.t+1) % self.step == 0:
+            self.optimizer.stepsize *= self.mu_decay
         # ori_fit = fit_array
         index = np.argsort(fit_array)
         # if self.dire == 1:
@@ -284,7 +279,7 @@ class BasicNES:
         # print(update_ratio)
         # print(self.mu)
         # update sigma
-        gol_sg = np.sum(fit_cut.reshape(len(fit_cut), 1)*(eps_cut**2-self.sigma**2)/self.sigma, axis=0) / int(self.popsize*self.elite_rt)
+        gol_sg = np.sum(fit_cut.reshape(len(fit_cut), 1)*(eps_cut**2-self.sigma**2)/self.sigma, axis=0) / (self.popsize*self.elite_rt)
         self.sigma += self.sigma_lr*gol_sg
         # if self.sigma_decay < 1:
         #     self.sigma[self.sigma > self.sigma_db] *= self.sigma_decay
@@ -304,46 +299,49 @@ class BasicNES:
         return (self.best, self.best_mu, self.update_ratio)
 
 
-# if __name__=="__main__":
-#
-#     dim = 30
-#     epochs = 10000
-#     lb = np.ones(dim) * -30
-#     ub = np.ones(dim) * 30
-#     # PSO = BasicPSO(dim, popsize=30, ada_w=True, dire=0, bound_check=True)
-#     mu = -np.ones(dim)
-#     NES = BasicNES(dim, lb, ub, mu, mu_lr=0.5, popsize=200, elite_rt=0.8, dire=0, optim='Adam')
-#     # solutions = PSO.start(lb, ub)  # initial
-#     fit_array = np.empty(NES.popsize)
-#
-#     res_cur = []
-#     rat_cur = []
-#     for i in range(epochs):
-#
-#         solutions = NES.ask()
-#         for j in range(NES.popsize):
-#             fit_array[j] = func(solutions[j, :])
-#
-#         NES.tell(fit_array)
-#         # solutions = PSO.ask(check_type="restart")
-#         res, best, ratio = NES.current_best()
-#
-#         # PSO.step(epochs, i, end_w=0.1)
-#
-#         # print('Iter:', i, ' bestv:', res[0])
-#         res_cur.append(res)
-#         rat_cur.append(ratio)
-#     # print(best)
-#
-#     plt.figure()
-#     plt.plot(res_cur)
-#     plt.yscale('log')
-#     plt.show()
-#
-#     plt.figure()
-#     plt.plot(rat_cur)
-#     plt.yscale('log')
-#     plt.show()
+if __name__=="__main__":
+
+    dim = 2
+    epochs = 2000
+    lb = np.ones(dim) * -30
+    ub = np.ones(dim) * 30
+    mu = np.ones(dim) * -30
+    NES = BasicNES(dim, lb, ub, mu, mu_lr=0.5, popsize=30, elite_rt=0.8, dire=0, optim='SGD', mirror_sample=True,
+                   step=2500, mu_decay=0.5)
+    fit_array = np.empty(NES.popsize)
+
+    res_cur = []
+    rat_cur = []
+    sig_cur = []
+    for i in range(epochs):
+
+        solutions = NES.ask()
+        for j in range(NES.popsize):
+            fit_array[j] = func(solutions[j, :])
+
+        NES.tell(fit_array)
+        res = NES.current_best()
+
+        # print('Iter:', i, ' bestv:', res[0])
+        res_cur.append(res[0])
+        rat_cur.append(res[2])
+        sig_cur.append(np.linalg.norm(NES.sigma))
+    # print(best)
+
+    plt.figure()
+    plt.plot(res_cur)
+    plt.yscale('log')
+    plt.show()
+
+    plt.figure()
+    plt.plot(rat_cur)
+    plt.yscale('log')
+    plt.show()
+
+    plt.figure()
+    plt.plot(sig_cur)
+    plt.yscale('log')
+    plt.show()
     
     
             
