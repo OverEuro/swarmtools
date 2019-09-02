@@ -66,6 +66,20 @@ class SGD(Optimizer):
         self.v = self.m * self.v + self.stepsize*der
         dir_ = self.v
         return dir_
+    
+
+class StepLR:
+    def __init__(self, optimizer, step=10, gamma=.1):
+        self.step = step
+        self.gamma = gamma
+        self.optimizer = optimizer
+        if not isinstance(optimizer, Optimizer):
+            raise TypeError('{} is not an Optimizer'.format(
+                type(optimizer).__name__))
+
+    def update_lr(self):
+        if self.optimizer.t % self.step == 0:
+            self.optimizer.stepsize *= self.gamma
 
 
 class BasicPSO:
@@ -194,7 +208,6 @@ class BasicNES:
                  sigma_db=0.01,
                  popsize=30,
                  elite_rt=1.0,
-                 dire=0,
                  optim='SGD',
                  bound_check=False,
                  mirror_sample=True,
@@ -212,7 +225,6 @@ class BasicNES:
         self.sigma_decay = sigma_decay
         self.sigma_db = sigma_db
         self.elite_rt = elite_rt
-        self.dire = dire
         self.bound_check = bound_check
         self.solutions = np.empty((self.popsize, self.dim))
         if optim == 'Adam':
@@ -221,12 +233,10 @@ class BasicNES:
             self.optimizer = BasicSGD(self, mu_lr)
         elif optim == 'SGD':
             self.optimizer = SGD(self, mu_lr, momentum=0.5)
-        if self.dire == 0:
-            self.best = np.inf
-            self.shapevec = np.linspace(0.5, -0.5, int(self.popsize*self.elite_rt))
-        if self.dire == 1:
-            self.best = -np.inf
-            self.shapevec = np.linspace(-0.5, 0.5, int(self.popsize * self.elite_rt))
+        self.best = np.inf
+        self.shapevec = np.linspace(0.5, -0.5, int(self.popsize*self.elite_rt))
+        if step > 0 and 0 < mu_decay < 1:
+            self.schlr = StepLR(self.optimizer, step=step, gamma=mu_decay)
         self.best_mu = np.zeros(self.dim)
         self.mirror_sample = mirror_sample  # If mirror_sample=True, the popsize must be even
         self.step = step
@@ -260,39 +270,25 @@ class BasicNES:
         return self.solutions
 
     def tell(self, fit_array):
-        if (self.optimizer.t+1) % self.step == 0:
-            self.optimizer.stepsize *= self.mu_decay
-        # ori_fit = fit_array
+        if self.step > 0 and 0 < self.mu_decay < 1:
+            self.schlr.update_lr()
+
         index = np.argsort(fit_array)
-        # if self.dire == 1:
-        #     index = index[::-1]
-        if self.dire == 0:
-            eps_cut = self.epsilon[index[0:int(self.popsize*self.elite_rt)], :]
-        else:
-            eps_cut = self.epsilon[index[int(self.popsize * (1-self.elite_rt))+1::], :]
+        eps_cut = self.epsilon[index[0:int(self.popsize*self.elite_rt)], :]
         fit_cut = self.shapevec
 
         # update mean
         gol_mu = np.sum(eps_cut*fit_cut.reshape(len(fit_cut), 1), axis=0)
-        # print(gol_mu)
+
         self.update_ratio = self.optimizer.update(gol_mu)
-        # print(update_ratio)
-        # print(self.mu)
+
         # update sigma
         gol_sg = np.sum(fit_cut.reshape(len(fit_cut), 1)*(eps_cut**2-self.sigma**2)/self.sigma, axis=0) / (self.popsize*self.elite_rt)
         self.sigma += self.sigma_lr*gol_sg
-        # if self.sigma_decay < 1:
-        #     self.sigma[self.sigma > self.sigma_db] *= self.sigma_decay
 
-        # print(self.sigma)
-        if self.dire == 0:
-            if fit_array[index[0]] < self.best:
-                self.best = fit_array[index[0]]
-                self.best_mu = np.copy(self.solutions[index[0], :])
-        elif self.dire == 1:
-            if fit_array[index[-1]] > self.best:
-                self.best = fit_array[index[-1]]
-                self.best_mu = np.copy(self.solutions[index[-1], :])
+        if fit_array[index[0]] < self.best:
+            self.best = fit_array[index[0]]
+            self.best_mu = np.copy(self.solutions[index[0], :])
 
     def current_best(self):
 
@@ -301,13 +297,13 @@ class BasicNES:
 
 if __name__=="__main__":
 
-    dim = 2
-    epochs = 2000
+    dim = 30
+    epochs = 10000
     lb = np.ones(dim) * -30
     ub = np.ones(dim) * 30
     mu = np.ones(dim) * -30
-    NES = BasicNES(dim, lb, ub, mu, mu_lr=0.5, popsize=30, elite_rt=0.8, dire=0, optim='SGD', mirror_sample=True,
-                   step=2500, mu_decay=0.5)
+    NES = BasicNES(dim, lb, ub, mu, mu_lr=0.5, popsize=50, elite_rt=0.8, optim='SGD', mirror_sample=True,
+                   step=int(epochs/3), mu_decay=0.9)
     fit_array = np.empty(NES.popsize)
 
     res_cur = []
