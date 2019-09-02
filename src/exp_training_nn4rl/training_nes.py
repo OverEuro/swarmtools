@@ -10,9 +10,9 @@ class con_bandit():
     '''stationary bandit problem'''
     def __init__(self):
         self.state = 0
-        self.bandits = np.array([[.9,.9,.6,-5],[.7,-5,1,.8],[-5,.9,.6,.8],
-                                 [.5,.6,1,-5],[.4,.5,-5,.8],[.4,-5,.7,.8],
-                                 [.5,.6,1,-5],[.4,.5,-5,.8],[.4,-5,.7,.8]])
+        self.bandits = np.array([[.9,.9,.6,.2],[.7,.2,1,.8],[.2,.9,.6,.8],
+                                 [.5,.6,1,.2],[.4,.5,.2,.8],[.4,.2,.7,.8],
+                                 [.5,.6,1,.2],[.4,.5,.2,.8],[.4,.2,.7,.8]])
         self.num_bandits = self.bandits.shape[0]
         self.num_actions = self.bandits.shape[1]
         
@@ -75,20 +75,21 @@ print("The number of NN's params =", NPARAMS)
 
 learner.eval()
 one_hot = F.one_hot(th.arange(0, env.num_bandits)).float().cuda()
-eval_num = 100000
-lb = np.ones(NPARAMS) * -1.5
-ub = np.ones(NPARAMS) * 1.5
+eval_num = 300000  # the number of samples
+lb = np.ones(NPARAMS) * -1
+ub = np.ones(NPARAMS) * 1
 mu = np.zeros(NPARAMS)
-optimizer = sts.BasicNES(NPARAMS, lb, ub, mu, mu_lr=0.01, popsize=30, elite_rt=0.8, optim='SGD')
+optimizer = sts.BasicNES(NPARAMS, lb, ub, mu, mu_lr=0.1, popsize=50, elite_rt=0.8, optim='SGD', mirror_sample=True,
+                         step=10, mu_decay=0.9)
 
 # solutions = optimizer.start(lbound, ubound)
 fits = np.empty(optimizer.popsize)
 evals = 0
-batch_size = env.num_bandits * 15
+batch_size = env.num_bandits * 20
 epoch = 0
 best_f = []
 epochs = int(eval_num / (optimizer.popsize * batch_size))
-while(evals < eval_num):
+while evals < eval_num:
 
     solutions = optimizer.ask()
     # compute all particles' fitness:
@@ -130,7 +131,7 @@ plt.figure()
 plt.plot(best_f)
 plt.xlabel('Epochs')
 plt.ylabel('Fitness')
-#plt.savefig('res_pso.png',dpi=600)
+#plt.savefig('res_nes.png',dpi=600)
 plt.show()
 
 
