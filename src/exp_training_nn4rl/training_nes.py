@@ -80,7 +80,7 @@ lb = np.ones(NPARAMS) * -1
 ub = np.ones(NPARAMS) * 1
 mu = np.zeros(NPARAMS)
 optimizer = sts.BasicNES(NPARAMS, lb, ub, mu, mu_lr=0.1, popsize=30, elite_rt=0.8, optim='SGD', mirror_sample=True,
-                         step=0, mu_decay=0.9)
+                         step=10, mu_decay=0.9)
 
 # solutions = optimizer.start(lbound, ubound)
 fits = np.empty(optimizer.popsize)

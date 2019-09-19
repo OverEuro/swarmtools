@@ -85,14 +85,16 @@ class StepLR:
 class BasicPSO:
     
     def __init__(self, num_params,
-                 w = 0.9,
-                 c1 = 2,
-                 c2 = 2,
-                 popsize = 15,
-                 ada_w = False,
-                 ada_c = False,
-                 dire = 0,
-                 bound_check = False):
+                 low_bound,
+                 up_bound,
+                 w=0.9,
+                 c1=2,
+                 c2=2,
+                 popsize=15,
+                 ada_w=False,
+                 ada_c=False,
+                 dire=0,
+                 bound_check=False):
         
         self.num_params = num_params
         self.w = w
@@ -103,10 +105,10 @@ class BasicPSO:
         self.ada_c = ada_c
         self.dire = dire                 # 0: descent; 1: ascent
         self.bound_check = bound_check   # True or False
-        self.lbounds = np.empty((self.popsize, self.num_params))
-        self.ubounds = np.empty((self.popsize, self.num_params))
+        self.lbound = low_bound  # array-like and size = num_params
+        self.ubound = up_bound  # same above
         self.solutions = np.empty((self.popsize, self.num_params))
-        self.velocitys = np.empty((self.popsize, self.num_params))
+        self.velocity = np.empty((self.popsize, self.num_params))
         if self.ada_w:
             self.step_size = np.empty(1)
         if self.dire == 0:
@@ -118,49 +120,41 @@ class BasicPSO:
         self.g_pop = np.empty(self.num_params)
         self.p_pops = np.empty((self.popsize, self.num_params))
     
-    def start(self, lbound, ubound):
-        '''initialize particles and velocity'''
-        self.lbound = lbound             # array-like and size = num_params
-        self.ubound = ubound             # same above
-        self.lbounds = np.tile(self.lbound, (self.popsize, 1))
-        self.ubounds = np.tile(self.ubound, (self.popsize, 1))
-        self.solutions = self.lbounds + np.random.rand(self.popsize, self.num_params) * \
-                        (self.ubounds - self.lbounds)
+    def start(self):
+        # initialize particles and velocity
+        self.solutions = self.lbound + np.random.rand(self.popsize, self.num_params) * \
+                         (self.ubound - self.lbound)
                         
-        self.velocitys = (self.lbounds - self.ubounds) + np.random.rand(self.popsize, self.num_params) * \
-                        (self.ubounds - self.lbounds) * 2
+        self.velocity = (self.lbound - self.ubound)/2 + np.random.rand(self.popsize, self.num_params) * \
+                        (self.ubound - self.lbound)
         
         return self.solutions
         
     def ask(self, check_type=None):
-        '''update all particles based on the basic PSO rule'''
-        g_pops = np.tile(self.g_pop, (self.popsize, 1))
-        R1 = np.random.rand(self.popsize, self.num_params)
-        R2 = np.random.rand(self.popsize, self.num_params)
-        self.velocitys = self.w*self.velocitys + self.c1*R1*(self.p_pops-self.solutions) + \
-                         self.c2*R2*(g_pops-self.solutions)
-        self.solutions += self.velocitys
+        # update all particles based on the basic PSO rule
+        r1 = np.random.rand(self.popsize, self.num_params)
+        r2 = np.random.rand(self.popsize, self.num_params)
+        self.velocity = self.w*self.velocity + self.c1*r1*(self.p_pops-self.solutions) + \
+                        self.c2*r2*(self.g_pop-self.solutions)
+        self.solutions += self.velocity
         
         # bound check
         if self.bound_check:
             # bound check
             if check_type == 'box':
-                idb = np.where(self.solutions<self.lbounds)
-                self.solutions[idb[0],idb[1]] = self.lbounds[idb[0],idb[1]]
-                idu = np.where(self.solutions>self.ubounds)
-                self.solutions[idu[0],idu[1]] = self.ubounds[idu[0],idu[1]]
+                self.solutions = np.clip(self.solutions, self.lbound, self.ubound)
             if check_type == 'restart':
-                randmaxt = self.lbounds + np.random.rand(self.popsize, self.num_params) * \
-                            (self.ubounds - self.lbounds)
-                idb = np.where(self.solutions<self.lbounds)
-                self.solutions[idb[0],idb[1]] = randmaxt[idb[0],idb[1]]
-                idu = np.where(self.solutions>self.ubounds)
-                self.solutions[idu[0],idu[1]] = randmaxt[idu[0],idu[1]]
+                rand_mat = self.lbound + np.random.rand(self.popsize, self.num_params) * \
+                            (self.ubound - self.lbound)
+                idb = np.where(self.solutions < self.lbound)
+                self.solutions[idb[0], idb[1]] = rand_mat[idb[0], idb[1]]
+                idu = np.where(self.solutions > self.ubound)
+                self.solutions[idu[0], idu[1]] = rand_mat[idu[0], idu[1]]
             
         return self.solutions     
         
     def tell(self, fit_array):
-        '''update p_best and g_best'''
+        # update p_best and g_best
         if self.dire == 0:
             idx = np.where(fit_array < self.p_fits)[0]
             self.p_fits[idx] = fit_array[idx]
@@ -179,18 +173,17 @@ class BasicPSO:
                 self.g_pop = np.copy(self.solutions[idb, :])
     
     def current_best(self):
-        '''get best params and cost function value'''
+        # get best params and cost function value
         best_params = np.copy(self.g_pop)
         best_fit = np.copy(self.g_fit)
-        best_pops = np.copy(self.p_pops)
         
-        return (best_params, best_fit)
+        return [best_params, best_fit]
     
-    def step(self, epochs, epoch, end_w):
-        '''Implement decrease linearly weight'''
-        assert self.ada_w,'Please set ada_w=True if you want to use adaptive weight'
+    def step(self, epoch_tol, epoch, end_w):
+        # Implement decrease linearly weight
+        assert self.ada_w, 'Please set ada_w=True if you want to use adaptive weight'
         if epoch == 0:
-            self.step_size = (self.w - end_w) / epochs
+            self.step_size = (self.w - end_w) / epoch_tol
         self.w -= self.step_size
         if self.w <= 0:
             self.w = self.step_size
@@ -304,7 +297,7 @@ if __name__=="__main__":
     mu = np.ones(dim) * -30
     NES = BasicNES(dim, lb, ub, mu, mu_lr=0.5, popsize=50, elite_rt=0.8, optim='SGD', mirror_sample=True,
                    step=int(epochs/3), mu_decay=0.9)
-    fit_array = np.empty(NES.popsize)
+    fit_arr = np.empty(NES.popsize)
 
     res_cur = []
     rat_cur = []
@@ -313,9 +306,9 @@ if __name__=="__main__":
 
         solutions = NES.ask()
         for j in range(NES.popsize):
-            fit_array[j] = func(solutions[j, :])
+            fit_arr[j] = func(solutions[j, :])
 
-        NES.tell(fit_array)
+        NES.tell(fit_arr)
         res = NES.current_best()
 
         # print('Iter:', i, ' bestv:', res[0])
