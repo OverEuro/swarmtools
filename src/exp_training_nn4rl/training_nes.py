@@ -60,7 +60,7 @@ def update_model(flat_param, model, model_shapes):
         param.data = block_data
 
 
-'''PSO training loop'''
+'''NES training loop'''
 env = con_bandit()
 learner = agent(env.num_bandits, env.num_actions).cuda()
 orig_params = []
@@ -79,13 +79,13 @@ eval_num = 300000  # the number of samples
 lb = np.ones(NPARAMS) * -1
 ub = np.ones(NPARAMS) * 1
 mu = np.zeros(NPARAMS)
-optimizer = sts.BasicNES(NPARAMS, lb, ub, mu, mu_lr=0.1, popsize=50, elite_rt=0.8, optim='SGD', mirror_sample=True,
-                         step=10, mu_decay=0.9)
+optimizer = sts.BasicNES(NPARAMS, lb, ub, mu, mu_lr=0.1, popsize=30, elite_rt=0.8, optim='SGD', mirror_sample=True,
+                         step=0, mu_decay=0.9)
 
 # solutions = optimizer.start(lbound, ubound)
 fits = np.empty(optimizer.popsize)
 evals = 0
-batch_size = env.num_bandits * 20
+batch_size = env.num_bandits * 15
 epoch = 0
 best_f = []
 epochs = int(eval_num / (optimizer.popsize * batch_size))
